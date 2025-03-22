@@ -1,0 +1,8 @@
+{
+    "prefix": "!",
+    "memory_limit": 25,
+    "memory_persistence": true,
+    "ai_model": "default",
+    "search_enabled": false,
+    "log_level": "INFO"
+}
