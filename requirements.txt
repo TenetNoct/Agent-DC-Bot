@@ -8,5 +8,9 @@ datetime
 json
 logging
 
+# Navegador headless (opcional)
+selenium>=4.1.0
+webdriver-manager>=3.5.2
+
 # Para desenvolvimento
 pylint>=2.11.0

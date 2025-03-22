@@ -97,6 +97,32 @@ class Memory:
         
         return True
     
+    def load_memory(self):
+        """Carrega a memória de um arquivo JSON"""
+        try:
+            if os.path.exists(self.memory_file):
+                with open(self.memory_file, 'r', encoding='utf-8') as f:
+                    memory_data = json.load(f)
+                    
+                    # Carrega a memória de curto prazo
+                    if "short_term" in memory_data and isinstance(memory_data["short_term"], list):
+                        # Limita a quantidade de mensagens carregadas ao tamanho máximo da deque
+                        for msg in memory_data["short_term"][-self.memory_limit:]:
+                            self.short_term.append(msg)
+                    
+                    # Carrega a memória de longo prazo
+                    if "long_term" in memory_data and isinstance(memory_data["long_term"], dict):
+                        self.long_term = memory_data["long_term"]
+                        
+                logger.info(f"Memória carregada com sucesso: {len(self.short_term)} mensagens recentes")
+                return True
+            else:
+                logger.info("Arquivo de memória não encontrado. Iniciando com memória vazia.")
+                return False
+        except Exception as e:
+            logger.error(f"Erro ao carregar memória: {e}")
+            return False
+    
     def save_memory(self):
         """Salva a memória em um arquivo JSON"""
         try:
@@ -114,3 +140,4 @@ class Memory:
             return True
         except Exception as e:
             logger.error(f"Erro ao salvar memória: {e}")
+            return False

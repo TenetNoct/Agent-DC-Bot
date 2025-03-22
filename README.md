@@ -1,7 +1,62 @@
-# 📌 **Documentação do Projeto: Bot Conversacional para Discord com LM Studio**
+# Bot Conversacional para Discord com LM Studio
 
-## 📖 **Visão Geral**
-Este projeto tem como objetivo desenvolver um bot para Discord capaz de interagir com os usuários de forma personalizada, utilizando um modelo de inteligência artificial local via **LM Studio**. O bot será modular, altamente configurável e permitirá que o usuário defina sua personalidade, comportamento e memória.
+Um bot para Discord que utiliza modelos de linguagem locais através do LM Studio para criar interações naturais e inteligentes.
+
+## Características
+
+- 🤖 Integração com LM Studio para processamento de linguagem natural
+- 💬 Responde a menções e palavras-chave configuráveis
+- 🧠 Sistema de memória para manter contexto das conversas
+- 🔍 Capacidade de busca na web para informações atualizadas
+- ⚙️ Configuração flexível via comandos, assistente interativo ou arquivo de configuração
+- 📝 Suporte a comandos personalizados
+- 🛡️ Sistema de moderação automática para filtrar conteúdo indesejado
+- 🔔 Sistema de notificações via Telegram ou Webhook
+
+## Requisitos
+
+- Python 3.8 ou superior
+- Discord.py 2.0 ou superior
+- LM Studio configurado com API habilitada
+- Token de bot do Discord
+
+## Instalação
+
+1. Clone este repositório
+2. Instale as dependências: `pip install -r requirements.txt`
+3. Configure o arquivo `.env` na pasta `bot_discord` com seu token do Discord
+4. Execute o bot: `python run_bot.py` ou use o arquivo `run_bot.bat` (Windows)
+
+## Configuração
+
+Consulte o arquivo `CONFIG_GUIDE.md` para instruções detalhadas sobre como configurar o bot.
+
+Alternativamente, use o comando `!setup` no Discord para iniciar o assistente de configuração interativo.
+
+## Comandos Principais
+
+- `!ajuda` - Mostra a lista de comandos disponíveis
+- `!setup` - Inicia o assistente de configuração interativo
+- `!config [param] [valor]` - Configura parâmetros do bot
+- `!limpar` - Limpa a memória de curto prazo do bot
+- `!buscar [consulta]` - Busca informações na web
+- `!personalidade [descrição]` - Define a personalidade do bot
+
+## Assistente de Configuração Interativo
+
+O comando `!setup` inicia um assistente interativo que guia o administrador através das seguintes configurações:
+
+1. **Nome do Bot e Palavra-Chave**: Define a palavra-chave que ativa o bot nas conversas
+2. **Prefixo de Comandos**: Permite alterar o prefixo usado para comandos
+3. **Memória Permanente**: Configura o armazenamento de mensagens importantes
+4. **Sistema de Busca**: Configura o sistema de busca headless (Selenium/Playwright)
+5. **Moderação Automática**: Configura filtros para spam, flood e palavras proibidas
+6. **Personalidade do Bot**: Escolha entre formal, casual e humorístico
+7. **Notificações**: Configura notificações via Telegram ou Webhook
+
+## Licença
+
+Este projeto está licenciado sob a licença MIT - veja o arquivo LICENSE para detalhes.
 
 ---
 

@@ -18,7 +18,7 @@ class AIHandler:
         self.config = config
         self.api_url = os.getenv('LM_STUDIO_API_URL', 'http://localhost:1234/v1')
         self.model = config.get_config_value('ai_model')
-        self.max_tokens = 1000  # Valor padrão
+        self.max_tokens = 2048  # Valor padrão
         self.temperature = 0.7  # Valor padrão
         
     def set_model_params(self, max_tokens=None, temperature=None):

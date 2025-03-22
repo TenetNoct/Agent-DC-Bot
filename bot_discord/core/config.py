@@ -27,7 +27,9 @@ class Config:
             "memory_persistence": True,  # Persistência de memória
             "ai_model": "default",  # Modelo de IA padrão
             "search_enabled": False,  # Busca na web desativada por padrão
-            "log_level": "INFO"  # Nível de log padrão
+            "log_level": "INFO",  # Nível de log padrão
+            "bot_keyword": "",  # Palavra-chave para acionar o bot (vazio = apenas menções)
+            "bot_personality": "assistente amigável"  # Personalidade padrão do bot
         }
         
         # Carrega ou cria configurações
