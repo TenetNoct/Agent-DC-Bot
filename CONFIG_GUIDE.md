@@ -76,13 +76,20 @@ LOG_LEVEL=INFO
 3. **Chaves de API para Busca na Web** (opcional):
    - **Google**:
      - Crie um projeto no [Google Cloud Console](https://console.cloud.google.com/)
-     - Ative a API Custom Search
-     - Crie credenciais para obter a chave de API
-     - Configure um mecanismo de pesquisa personalizado para obter o CX
+     - Ative a **API Custom Search JSON v1**
+     - Na seção "Credenciais", crie uma chave de API
+     - Acesse [Programmable Search Engine](https://programmablesearchengine.google.com/) para criar um CX
+     - Adicione ambas as chaves ao `.env`
+
    - **Bing**:
-     - Inscreva-se no [Portal do Azure](https://portal.azure.com/)
-     - Crie um recurso de Pesquisa Bing
-     - Obtenha a chave de API nas configurações do recurso
+     - Acesse o [Portal Microsoft Azure](https://portal.azure.com/)
+     - Crie um recurso **Bing Search v7**
+     - Na seção "Chaves e Endpoint", copie a chave de autenticação
+     - Adicione ao campo `BING_API_KEY` no `.env`
+
+4. **Validação das Credenciais**:
+   - Execute `python -m bot_discord.modules.search --test-apis`
+   - O sistema testará automaticamente todas as APIs configuradas
 
 ## 📂 Estrutura do Projeto
 
@@ -229,6 +236,8 @@ Quando a persistência está ativada, o bot salva as informações no arquivo `b
 ```
 
 ## 🔍 Sistema de Busca
+
+O bot utiliza a biblioteca
 
 O bot oferece capacidade de busca na web para encontrar informações atualizadas. Existem três métodos de busca disponíveis:
 

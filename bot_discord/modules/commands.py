@@ -50,12 +50,13 @@ class CommandHandler:
         async def search_command(ctx, *, query):
             await self._search_command(ctx, query)
             
-        @self.bot.command(name='buscar_com', help='Busca informações na web com um motor específico')
-        async def search_with_engine_command(ctx, engine=None, *, query=None):
-            if not query:
-                await ctx.send("❌ Você precisa especificar uma consulta para buscar.")
-                return
-            await self._search_command(ctx, query, engine)
+        @self.bot.command(name='buscar_noticias', help='Busca notícias recentes na web')
+        async def search_news_command(ctx, *, query):
+            await self._search_command(ctx, query, search_type='news')
+            
+        @self.bot.command(name='buscar_imagens', help='Busca imagens na web')
+        async def search_images_command(ctx, *, query):
+            await self._search_command(ctx, query, search_type='images')
             
         @self.bot.command(name='cache_config', help='Configura o sistema de cache para buscas')
         async def cache_config_command(ctx, param=None, value=None):
@@ -300,43 +301,67 @@ class CommandHandler:
     async def _search_command(self, ctx, query, engine=None):
         """Busca informações na web"""
         if not self.config.get_config_value('search_enabled'):
-            await ctx.send("❌ Busca na web desativada. Ative nas configurações do bot.")
+            await ctx.send("❌ Busca na web desativada. Use `!config search_enabled true` para ativar.")
             return
         
         # Determina o motor de busca a ser usado
         if not engine:
-            # Verifica se há chaves de API configuradas
-            if self.search_engine.google_api_key and self.search_engine.google_cx:
-                engine = 'google'
-            elif self.search_engine.bing_api_key:
-                engine = 'bing'
-            else:
-                engine = 'headless'  # Usa headless como fallback
+            # Usa 'auto' como padrão para priorizar Selenium quando disponível
+            engine = 'auto'
         
-        await ctx.send(f"🔍 Buscando informações sobre: `{query}` usando {engine}...")
+        # Informa ao usuário que a busca está em andamento
+        search_message = await ctx.send(f"🔍 Buscando informações sobre: **{query}** usando {engine}...")
         
-        # Realiza a busca
-        results = self.search_engine.web_search(query, engine=engine)
-        
-        if not results or isinstance(results, list) and isinstance(results[0], str):
-            # Erro na busca
-            await ctx.send(f"❌ {results[0] if results else 'Nenhum resultado encontrado'}")
-            return
-        
-        # Cria um embed com os resultados
-        embed = discord.Embed(
-            title=f"Resultados para: {query}",
-            color=discord.Color.blue()
-        )
-        
-        for i, result in enumerate(results[:5], 1):
-            embed.add_field(
-                name=f"{i}. {result['title']}",
-                value=f"[Link]({result['link']})\n{result['snippet']}",
-                inline=False
+        try:
+            # Realiza a busca
+            results = self.search_engine.web_search(query, engine=engine)
+            
+            if not results or isinstance(results, list) and isinstance(results[0], str):
+                # Erro na busca
+                await search_message.edit(content=f"❌ {results[0] if results else 'Nenhum resultado encontrado'}")
+                return
+            
+            # Cria um embed com os resultados
+            embed = discord.Embed(
+                title=f"🔍 Resultados para: {query}",
+                description="Aqui estão os links relevantes:",
+                color=discord.Color.blue()
             )
-        
-        await ctx.send(embed=embed)
+            
+            for i, result in enumerate(results[:5], 1):
+                title = result.get('title', 'Sem título')
+                link = result.get('link', '#')
+                snippet = result.get('snippet', 'Sem descrição')
+                
+                # Limita o tamanho do snippet
+                if len(snippet) > 200:
+                    snippet = snippet[:197] + "..."
+                
+                embed.add_field(
+                    name=f"{i}. {title}",
+                    value=f"{snippet}\n[Acessar link]({link})",
+                    inline=False
+                )
+            
+            # Adiciona um rodapé com informações sobre a busca
+            import datetime
+            embed.set_footer(text=f"Busca realizada em {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}")
+            
+            # Processa os resultados com a IA
+            try:
+                ai_response = await self.ai_handler.analyze_search_results(results, query)
+                await ctx.send(f"🧠 Análise da IA:\n{ai_response}")
+            except Exception as e:
+                logger.error(f"Erro no processamento da IA: {e}")
+                await ctx.send("❌ Erro ao processar resultados com a IA")
+            
+            # Edita a mensagem original com os resultados
+            await search_message.edit(content=None, embed=embed)
+            
+        except Exception as e:
+            logger.error(f"Erro ao realizar busca: {e}")
+            await search_message.edit(content=f"❌ Ocorreu um erro ao buscar por: **{query}**")
+            await ctx.send(f"Detalhes do erro: {str(e)}")
     
     async def _personality_command(self, ctx, personality):
         """Define a personalidade do bot"""

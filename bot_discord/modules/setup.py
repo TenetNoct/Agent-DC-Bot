@@ -45,7 +45,7 @@ class SetupWizard:
             {
                 "name": "search_settings",
                 "title": "Sistema de Busca",
-                "description": "Configura o sistema de busca headless (Selenium/Playwright).",
+                "description": "Configura o sistema de busca usando DuckDuckGo.",
                 "handler": self._setup_search_settings
             },
             {
@@ -391,36 +391,142 @@ class SetupWizard:
                 setup_data["config"]["search_enabled"] = True
                 await ctx.send("✅ Busca na web **ativada**")
                 
-                # Pergunta sobre o modo de busca headless
+                # Pergunta sobre as configurações de busca
                 embed = discord.Embed(
-                    title="🔍 Modo de Busca Headless",
-                    description="O modo headless permite realizar buscas sem APIs pagas, usando um navegador automatizado.",
+                    title="🔍 Configurações de Busca",
+                    description="Configure as opções de busca usando a API DuckDuckGo.",
                     color=discord.Color.blue()
                 )
                 embed.add_field(
-                    name="📝 Motor de Busca Headless",
-                    value="Digite `selenium` para usar o Selenium\nDigite `playwright` para usar o Playwright\nOu digite `pular` para usar o padrão (Selenium).",
+                    name="📝 Configurações de Busca",
+                    value="Digite `1` para configurar a região de busca\nDigite `2` para configurar o nível de filtro de conteúdo\nDigite `3` para configurar o cache de busca\nOu digite `pular` para usar as configurações padrão.",
                     inline=False
                 )
                 
                 await ctx.send(embed=embed)
                 
-                # Aguarda a resposta do usuário para o motor de busca
+                # Aguarda a resposta do usuário para as configurações de busca
                 response = await self._wait_for_response(ctx)
                 if response is None:
                     return
                     
-                # Processa a resposta do motor de busca
+                # Processa a resposta das configurações de busca
                 if response.content.lower() != "pular":
-                    if response.content.lower() == "playwright":
-                        setup_data["config"]["use_playwright"] = True
-                        await ctx.send("✅ Motor de busca definido como: **Playwright**")
-                    elif response.content.lower() == "selenium":
-                        setup_data["config"]["use_playwright"] = False
-                        await ctx.send("✅ Motor de busca definido como: **Selenium**")
-                    else:
-                        await ctx.send("⚠️ Opção inválida. Usando o motor padrão (Selenium).")
-                        setup_data["config"]["use_playwright"] = False
+                    # Configuração de região
+                    if response.content == "1":
+                        region_embed = discord.Embed(
+                            title="🌎 Região de Busca",
+                            description="Esta configuração define a região e idioma dos resultados de busca.",
+                            color=discord.Color.blue()
+                        )
+                        region_embed.add_field(
+                            name="📝 Região",
+                            value="Digite `br-pt` para Brasil/Português\nDigite `us-en` para EUA/Inglês\nDigite `es-es` para Espanha/Espanhol\nOu digite outra região no formato `país-idioma`.",
+                            inline=False
+                        )
+                        
+                        await ctx.send(embed=region_embed)
+                        
+                        # Aguarda a resposta do usuário para a região
+                        region_response = await self._wait_for_response(ctx)
+                        if region_response is None:
+                            return
+                            
+                        setup_data["config"]["SEARCH_REGION"] = region_response.content.lower()
+                        await ctx.send(f"✅ Região de busca definida como: **{region_response.content.lower()}**")
+                    
+                    # Configuração de filtro de conteúdo
+                    elif response.content == "2":
+                        safesearch_embed = discord.Embed(
+                            title="🔒 Filtro de Conteúdo",
+                            description="Esta configuração define o nível de filtragem de conteúdo adulto ou sensível.",
+                            color=discord.Color.blue()
+                        )
+                        safesearch_embed.add_field(
+                            name="📝 Nível de Filtro",
+                            value="Digite `off` para desativar o filtro\nDigite `moderate` para filtro moderado\nDigite `strict` para filtro rigoroso",
+                            inline=False
+                        )
+                        
+                        await ctx.send(embed=safesearch_embed)
+                        
+                        # Aguarda a resposta do usuário para o filtro
+                        safesearch_response = await self._wait_for_response(ctx)
+                        if safesearch_response is None:
+                            return
+                            
+                        if safesearch_response.content.lower() in ["off", "moderate", "strict"]:
+                            setup_data["config"]["SEARCH_SAFESEARCH"] = safesearch_response.content.lower()
+                            await ctx.send(f"✅ Filtro de conteúdo definido como: **{safesearch_response.content.lower()}**")
+                        else:
+                            await ctx.send("⚠️ Opção inválida. Usando o filtro moderado.")
+                            setup_data["config"]["SEARCH_SAFESEARCH"] = "moderate"
+                    
+                    # Configuração de cache
+                    elif response.content == "3":
+                        cache_embed = discord.Embed(
+                            title="💾 Cache de Busca",
+                            description="Esta configuração define se os resultados de busca serão armazenados em cache para melhorar o desempenho.",
+                            color=discord.Color.blue()
+                        )
+                        cache_embed.add_field(
+                            name="📝 Cache",
+                            value="Digite `ativar` para ativar o cache\nDigite `desativar` para desativar o cache",
+                            inline=False
+                        )
+                        
+                        await ctx.send(embed=cache_embed)
+                        
+                        # Aguarda a resposta do usuário para o cache
+                        cache_response = await self._wait_for_response(ctx)
+                        if cache_response is None:
+                            return
+                            
+                        if cache_response.content.lower() == "ativar":
+                            setup_data["config"]["CACHE_ENABLED"] = True
+                            await ctx.send("✅ Cache de busca **ativado**")
+                            
+                            # Pergunta sobre o tempo de expiração do cache
+                            cache_expiry_embed = discord.Embed(
+                                title="⏱️ Tempo de Expiração do Cache",
+                                description="Esta configuração define por quanto tempo os resultados de busca serão mantidos em cache.",
+                                color=discord.Color.blue()
+                            )
+                            cache_expiry_embed.add_field(
+                                name="📝 Tempo (em horas)",
+                                value="Digite o número de horas (1-72)\nOu digite `pular` para usar o padrão (24 horas).",
+                                inline=False
+                            )
+                            
+                            await ctx.send(embed=cache_expiry_embed)
+                            
+                            # Aguarda a resposta do usuário para o tempo de expiração
+                            cache_expiry_response = await self._wait_for_response(ctx)
+                            if cache_expiry_response is None:
+                                return
+                                
+                            if cache_expiry_response.content.lower() != "pular":
+                                try:
+                                    expiry_hours = int(cache_expiry_response.content)
+                                    if expiry_hours < 1:
+                                        await ctx.send("⚠️ O tempo mínimo é 1 hora. Definindo como 1 hora.")
+                                        expiry_hours = 1
+                                    elif expiry_hours > 72:
+                                        await ctx.send("⚠️ O tempo máximo é 72 horas. Definindo como 72 horas.")
+                                        expiry_hours = 72
+                                        
+                                    setup_data["config"]["CACHE_EXPIRY"] = expiry_hours
+                                    await ctx.send(f"✅ Tempo de expiração do cache definido como: **{expiry_hours} horas**")
+                                except ValueError:
+                                    await ctx.send("⚠️ Valor inválido. Usando o tempo padrão de 24 horas.")
+                                    setup_data["config"]["CACHE_EXPIRY"] = 24
+                        elif cache_response.content.lower() == "desativar":
+                            setup_data["config"]["CACHE_ENABLED"] = False
+                            await ctx.send("✅ Cache de busca **desativado**")
+                        else:
+                            await ctx.send("⚠️ Opção inválida. Usando as configurações padrão.")
+                            setup_data["config"]["CACHE_ENABLED"] = True
+                            setup_data["config"]["CACHE_EXPIRY"] = 24
             elif response.content.lower() == "desativar":
                 setup_data["config"]["search_enabled"] = False
                 await ctx.send("✅ Busca na web **desativada**")

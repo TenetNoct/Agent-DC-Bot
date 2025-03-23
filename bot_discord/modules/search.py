@@ -1,555 +1,288 @@
-# search.py
-# Busca na web e em arquivos
-
-import requests
-import json
-import os
 import logging
-import re
+import os
+import json
 import time
-import hashlib
+import requests
 from datetime import datetime, timedelta
-from urllib.parse import quote_plus
-from dotenv import load_dotenv
+from pathlib import Path
 
-# Importações para navegador headless
-try:
-    from selenium import webdriver
-    from selenium.webdriver.chrome.options import Options
-    from selenium.webdriver.chrome.service import Service
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.support import expected_conditions as EC
-    from selenium.common.exceptions import TimeoutException, WebDriverException, NoSuchElementException, StaleElementReferenceException
-    from webdriver_manager.chrome import ChromeDriverManager
-    SELENIUM_AVAILABLE = True
-except ImportError:
-    SELENIUM_AVAILABLE = False
-    logger = logging.getLogger(__name__)
-    logger.warning("Selenium não está instalado. A busca headless não estará disponível.")
-    logger.info("Para instalar, execute: pip install selenium webdriver-manager")
+# Importa a biblioteca duckduckgo_search e suas exceções
+from duckduckgo_search import DDGS
+from duckduckgo_search.exceptions import (
+    DuckDuckGoSearchException,
+    RatelimitException,
+    TimeoutException,
+    ConversationLimitException
+)
 
-# Tenta importar o Playwright como alternativa
-try:
-    import playwright
-    from playwright.sync_api import sync_playwright
-    PLAYWRIGHT_AVAILABLE = True
-except ImportError:
-    PLAYWRIGHT_AVAILABLE = False
-
-# Carrega variáveis de ambiente
-load_dotenv()
-
-# Configuração do logger
 logger = logging.getLogger(__name__)
 
 class SearchEngine:
     def __init__(self, config):
         self.config = config
-        self.search_enabled = config.get_config_value('search_enabled')
-        self.google_api_key = os.getenv('GOOGLE_API_KEY')
-        self.google_cx = os.getenv('GOOGLE_CX')
-        self.bing_api_key = os.getenv('BING_API_KEY')
-        
-        # Inicializa o driver do navegador headless se disponível
-        self.headless_driver = None
-        self.headless_available = SELENIUM_AVAILABLE
-        self.playwright_available = PLAYWRIGHT_AVAILABLE
-        
-        # Sistema de cache para resultados de busca
-        self.cache_dir = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            'data',
-            'search_cache'
-        )
-        # Cria o diretório de cache se não existir
-        os.makedirs(self.cache_dir, exist_ok=True)
+        self.timeout = 30
         
         # Configuração do cache
-        self.cache_enabled = True
-        self.cache_expiry = 24  # Horas até a expiração do cache
+        self.cache_enabled = self.config.get_config_value('CACHE_ENABLED', True)
+        self.cache_expiry = int(self.config.get_config_value('CACHE_EXPIRY', 24))
         
-    def _get_cache_key(self, query, engine, num_results):
-        """Gera uma chave única para o cache baseada na consulta e parâmetros"""
-        # Cria uma string com todos os parâmetros relevantes
-        cache_string = f"{query}|{engine}|{num_results}"
-        # Gera um hash MD5 para usar como nome de arquivo
-        return hashlib.md5(cache_string.encode('utf-8')).hexdigest()
+        # Diretório de cache
+        self.cache_dir = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) / 'data' / 'search_cache'
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Configurações de região e segurança
+        self.region = self.config.get_config_value('SEARCH_REGION', 'br-pt')
+        self.safesearch = self.config.get_config_value('SEARCH_SAFESEARCH', 'moderate')
+        
+        # Inicializa o cache se necessário
+        self._clean_expired_cache()
     
-    def _get_cache_path(self, cache_key):
-        """Retorna o caminho completo para o arquivo de cache"""
-        return os.path.join(self.cache_dir, f"{cache_key}.json")
-    
-    def _get_from_cache(self, query, engine, num_results):
-        """Tenta obter resultados do cache"""
-        if not self.cache_enabled:
-            return None
+    def web_search(self, query, search_type='text', num_results=5, engine=None):
+        """Realiza uma busca na web usando DuckDuckGo
+        
+        Args:
+            query (str): Consulta de busca
+            search_type (str): Tipo de busca ('text', 'news', 'images')
+            num_results (int): Número máximo de resultados
+            engine (str, optional): Parâmetro ignorado, mantido para compatibilidade
             
-        cache_key = self._get_cache_key(query, engine, num_results)
-        cache_path = self._get_cache_path(cache_key)
-        
-        # Verifica se o arquivo de cache existe
-        if not os.path.exists(cache_path):
-            return None
+        Returns:
+            list: Lista de resultados processados para a IA
+        """
+        try:
+            # Verifica se há resultados em cache
+            if self.cache_enabled:
+                cached_results = self._get_from_cache(query, search_type)
+                if cached_results:
+                    logger.info(f"Resultados obtidos do cache para: {query}")
+                    return cached_results
+            
+            # Informa ao usuário que está realizando a busca
+            logger.info(f"Realizando busca por: {query}")
+            
+            # Realiza a busca de acordo com o tipo
+            if search_type == 'news':
+                results = self._news_search(query, num_results)
+            elif search_type == 'images':
+                results = self._image_search(query, num_results)
+            else:  # text search (padrão)
+                results = self._text_search(query, num_results)
+            
+            # Processa os resultados para a IA
+            processed_results = self._preprocess_for_ai(results)
+            
+            # Salva no cache se habilitado
+            if self.cache_enabled and processed_results:
+                self._save_to_cache(query, search_type, processed_results)
+            
+            return processed_results
+            
+        except Exception as e:
+            logger.error(f"Erro na busca: {e}")
+            return [{"title": "Erro na busca", "link": "", "snippet": f"Ocorreu um erro ao buscar por '{query}'. Tente novamente mais tarde."}]
+    
+    def _text_search(self, query, num_results):
+        """Realiza busca de texto usando DuckDuckGo"""
+        try:
+            with DDGS() as ddgs:
+                results = []
+                for r in ddgs.text(query, region=self.region, safesearch=self.safesearch, max_results=num_results):
+                    results.append({
+                        'title': r.get('title', ''),
+                        'link': r.get('href', ''),
+                        'snippet': r.get('body', '')
+                    })
+                return results
+        except RatelimitException as e:
+            logger.error(f"Limite de requisições excedido: {e}")
+            return [{'title': 'Limite de requisições excedido', 'link': '', 'snippet': 'Tente novamente mais tarde.'}]
+        except TimeoutException as e:
+            logger.error(f"Timeout na busca: {e}")
+            return [{'title': 'Timeout na busca', 'link': '', 'snippet': 'A busca demorou muito para responder. Tente novamente.'}]
+        except DuckDuckGoSearchException as e:
+            logger.error(f"Erro na API do DuckDuckGo: {e}")
+            return [{'title': 'Erro na busca', 'link': '', 'snippet': 'Ocorreu um erro na API de busca. Tente novamente mais tarde.'}]
+        except Exception as e:
+            logger.error(f"Erro na busca de texto: {e}")
+            return []
+    
+    def _news_search(self, query, num_results):
+        """Realiza busca de notícias usando DuckDuckGo"""
+        try:
+            with DDGS() as ddgs:
+                results = []
+                for r in ddgs.news(query, region=self.region, max_results=num_results):
+                    results.append({
+                        'title': r.get('title', ''),
+                        'link': r.get('url', ''),
+                        'snippet': r.get('body', ''),
+                        'date': r.get('date', '')
+                    })
+                return results
+        except RatelimitException as e:
+            logger.error(f"Limite de requisições excedido: {e}")
+            return [{'title': 'Limite de requisições excedido', 'link': '', 'snippet': 'Tente novamente mais tarde.'}]
+        except TimeoutException as e:
+            logger.error(f"Timeout na busca: {e}")
+            return [{'title': 'Timeout na busca', 'link': '', 'snippet': 'A busca demorou muito para responder. Tente novamente.'}]
+        except DuckDuckGoSearchException as e:
+            logger.error(f"Erro na API do DuckDuckGo: {e}")
+            return [{'title': 'Erro na busca', 'link': '', 'snippet': 'Ocorreu um erro na API de busca. Tente novamente mais tarde.'}]
+        except Exception as e:
+            logger.error(f"Erro na busca de notícias: {e}")
+            return []
+    
+    def _clean_expired_cache(self):
+        """Remove arquivos de cache expirados"""
+        if not self.cache_enabled:
+            return
             
         try:
+            # Define o tempo de expiração
+            expiry_time = datetime.now() - timedelta(hours=self.cache_expiry)
+            
+            # Verifica todos os arquivos no diretório de cache
+            for cache_file in self.cache_dir.glob('*.json'):
+                try:
+                    # Carrega os dados do arquivo
+                    with open(cache_file, 'r', encoding='utf-8') as f:
+                        cache_data = json.load(f)
+                    
+                    # Verifica se o cache expirou
+                    timestamp = cache_data.get('timestamp', 0)
+                    if timestamp < expiry_time.timestamp():
+                        # Remove o arquivo expirado
+                        os.remove(cache_file)
+                        logger.debug(f"Cache expirado removido: {cache_file.name}")
+                except Exception as e:
+                    # Se houver erro ao processar um arquivo, tenta removê-lo
+                    logger.error(f"Erro ao processar arquivo de cache {cache_file.name}: {e}")
+                    try:
+                        os.remove(cache_file)
+                    except:
+                        pass
+        except Exception as e:
+            logger.error(f"Erro ao limpar cache: {e}")
+    
+    def _get_from_cache(self, query, search_type):
+        """Obtém resultados do cache"""
+        try:
+            # Cria um nome de arquivo baseado na consulta e tipo de busca
+            # Remove caracteres especiais e sanitiza o nome do arquivo
+            import re
+            cache_key = re.sub(r'[^a-zA-Z0-9_-]', '_', f"{query}_{search_type}".lower())
+            cache_file = self.cache_dir / f"{cache_key}.json"
+            
+            # Verifica se o arquivo existe
+            if not cache_file.exists():
+                return None
+                
             # Carrega os dados do cache
-            with open(cache_path, 'r', encoding='utf-8') as f:
+            with open(cache_file, 'r', encoding='utf-8') as f:
                 cache_data = json.load(f)
                 
             # Verifica se o cache expirou
-            cache_time = datetime.fromisoformat(cache_data.get('timestamp', '2000-01-01T00:00:00'))
+            timestamp = cache_data.get('timestamp', 0)
             expiry_time = datetime.now() - timedelta(hours=self.cache_expiry)
             
-            if cache_time < expiry_time:
-                logger.info(f"Cache expirado para consulta: {query}")
+            if timestamp < expiry_time.timestamp():
+                # Remove o cache expirado
+                os.remove(cache_file)
                 return None
                 
-            logger.info(f"Resultados obtidos do cache para: {query}")
+            # Retorna os resultados do cache
             return cache_data.get('results', [])
-                
+            
         except Exception as e:
-            logger.warning(f"Erro ao ler cache: {e}")
+            logger.error(f"Erro ao ler cache: {e}")
             return None
     
-    def _save_to_cache(self, query, engine, num_results, results):
-        """Salva os resultados no cache"""
-        if not self.cache_enabled or not results:
-            return False
-            
-        cache_key = self._get_cache_key(query, engine, num_results)
-        cache_path = self._get_cache_path(cache_key)
-        
+    def _save_to_cache(self, query, search_type, results):
+        """Salva resultados no cache"""
         try:
-            # Prepara os dados para o cache
+            # Cria um nome de arquivo baseado na consulta e tipo de busca
+            # Remove caracteres especiais e sanitiza o nome do arquivo
+            import re
+            cache_key = re.sub(r'[^a-zA-Z0-9_-]', '_', f"{query}_{search_type}".lower())
+            cache_file = self.cache_dir / f"{cache_key}.json"
+            
+            # Prepara os dados para salvar
             cache_data = {
                 'query': query,
-                'engine': engine,
-                'num_results': num_results,
-                'timestamp': datetime.now().isoformat(),
+                'search_type': search_type,
+                'timestamp': datetime.now().timestamp(),
                 'results': results
             }
             
-            # Salva os dados no cache
-            with open(cache_path, 'w', encoding='utf-8') as f:
-                json.dump(cache_data, f, indent=4, ensure_ascii=False)
+            # Salva os dados no arquivo
+            with open(cache_file, 'w', encoding='utf-8') as f:
+                json.dump(cache_data, f, ensure_ascii=False, indent=2)
                 
-            logger.info(f"Resultados salvos no cache para: {query}")
-            return True
-                
+            logger.debug(f"Resultados salvos em cache: {cache_file.name}")
+            
         except Exception as e:
-            logger.warning(f"Erro ao salvar cache: {e}")
-            return False
+            logger.error(f"Erro ao salvar cache: {e}")
     
-    def web_search(self, query, engine='google', num_results=5):
-        """Realiza uma busca na web usando Google, Bing ou navegador headless"""
-        if not self.search_enabled:
-            logger.warning("Busca na web desativada nas configurações")
-            return ["Busca na web desativada. Ative nas configurações do bot."]
-        
-        # Tenta obter resultados do cache primeiro
-        cached_results = self._get_from_cache(query, engine, num_results)
-        if cached_results:
-            return cached_results
-        
-        # Se não encontrou no cache, realiza a busca
-        results = None
-        
-        # Tenta usar o navegador headless primeiro se disponível
-        if engine.lower() == 'headless':
-            if self.headless_available:
-                results = self._headless_search(query, num_results)
-            elif self.playwright_available:
-                results = self._playwright_search(query, num_results)
-            else:
-                logger.warning("Nenhum navegador headless disponível")
-                results = ["Busca headless não disponível. Instale o Selenium ou Playwright."]
-        elif engine.lower() == 'google':
-            results = self._google_search(query, num_results)
-        elif engine.lower() == 'bing':
-            results = self._bing_search(query, num_results)
-        else:
-            logger.error(f"Motor de busca não suportado: {engine}")
-            results = ["Motor de busca não suportado. Use 'google', 'bing' ou 'headless'."]
-        
-        # Salva os resultados no cache se forem válidos
-        if results and isinstance(results, list) and isinstance(results[0], dict):
-            self._save_to_cache(query, engine, num_results, results)
-            
-        return results
-    
-    def _google_search(self, query, num_results=5):
-        """Realiza uma busca usando a API do Google"""
-        if not self.google_api_key or not self.google_cx:
-            logger.error("Chaves de API do Google não configuradas")
-            return ["Chaves de API do Google não configuradas."]
-            
+    def _image_search(self, query, num_results):
+        """Realiza busca de imagens usando DuckDuckGo"""
         try:
-            url = "https://www.googleapis.com/customsearch/v1"
-            params = {
-                'key': self.google_api_key,
-                'cx': self.google_cx,
-                'q': query,
-                'num': num_results
-            }
-            
-            response = requests.get(url, params=params)
-            
-            if response.status_code == 200:
-                results = response.json()
-                search_results = []
-                
-                if 'items' in results:
-                    for item in results['items']:
-                        search_results.append({
-                            'title': item.get('title', ''),
-                            'link': item.get('link', ''),
-                            'snippet': item.get('snippet', '')
-                        })
-                    
-                return search_results
-            else:
-                logger.error(f"Erro na API do Google: {response.status_code} - {response.text}")
-                return [f"Erro na busca: {response.status_code}"]
-                
+            with DDGS() as ddgs:
+                results = []
+                for r in ddgs.images(query, region=self.region, safesearch=self.safesearch, max_results=num_results):
+                    results.append({
+                        'title': r.get('title', ''),
+                        'link': r.get('image', ''),
+                        'snippet': r.get('title', ''),
+                        'thumbnail': r.get('thumbnail', '')
+                    })
+                return results
+        except RatelimitException as e:
+            logger.error(f"Limite de requisições excedido: {e}")
+            return [{'title': 'Limite de requisições excedido', 'link': '', 'snippet': 'Tente novamente mais tarde.'}]
+        except TimeoutException as e:
+            logger.error(f"Timeout na busca: {e}")
+            return [{'title': 'Timeout na busca', 'link': '', 'snippet': 'A busca demorou muito para responder. Tente novamente.'}]
+        except DuckDuckGoSearchException as e:
+            logger.error(f"Erro na API do DuckDuckGo: {e}")
+            return [{'title': 'Erro na busca', 'link': '', 'snippet': 'Ocorreu um erro na API de busca. Tente novamente mais tarde.'}]
         except Exception as e:
-            logger.error(f"Erro ao realizar busca no Google: {e}")
-            return [f"Erro ao realizar busca: {e}"]
+            logger.error(f"Erro na busca de imagens: {e}")
+            return []
     
-    def _bing_search(self, query, num_results=5):
-        """Realiza uma busca usando a API do Bing"""
-        if not self.bing_api_key:
-            logger.error("Chave de API do Bing não configurada")
-            return ["Chave de API do Bing não configurada."]
-            
-        try:
-            url = "https://api.bing.microsoft.com/v7.0/search"
-            headers = {"Ocp-Apim-Subscription-Key": self.bing_api_key}
-            params = {"q": query, "count": num_results}
-            
-            response = requests.get(url, headers=headers, params=params)
-            
-            if response.status_code == 200:
-                results = response.json()
-                search_results = []
-                
-                if 'webPages' in results and 'value' in results['webPages']:
-                    for item in results['webPages']['value']:
-                        search_results.append({
-                            'title': item.get('name', ''),
-                            'link': item.get('url', ''),
-                            'snippet': item.get('snippet', '')
-                        })
-                    
-                return search_results
-            else:
-                logger.error(f"Erro na API do Bing: {response.status_code} - {response.text}")
-                return [f"Erro na busca: {response.status_code}"]
-                
-        except Exception as e:
-            logger.error(f"Erro ao realizar busca no Bing: {e}")
-            return [f"Erro ao realizar busca: {e}"]
-    
-    def _headless_search(self, query, num_results=5):
-        """Realiza uma busca usando o Selenium com navegador headless"""
-        if not self.headless_available:
-            logger.error("Selenium não está disponível para busca headless")
-            return ["Busca headless não disponível. Instale o Selenium com 'pip install selenium webdriver-manager'"]
+    def _preprocess_for_ai(self, results):
+        """Processa os resultados para um formato adequado para a IA
         
-        try:
-            # Inicializa o driver se ainda não foi inicializado
-            if self.headless_driver is None:
-                # Configura as opções do Chrome
-                chrome_options = Options()
-                chrome_options.add_argument("--headless=new")  # Novo modo headless
-                chrome_options.add_argument("--disable-gpu")
-                chrome_options.add_argument("--no-sandbox")
-                chrome_options.add_argument("--disable-dev-shm-usage")
-                chrome_options.add_argument("--disable-extensions")
-                chrome_options.add_argument("--disable-notifications")
-                chrome_options.add_argument("--disable-infobars")
-                chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-                
-                # Inicializa o driver
-                try:
-                    service = Service(ChromeDriverManager().install())
-                    self.headless_driver = webdriver.Chrome(service=service, options=chrome_options)
-                    logger.info("Driver do Chrome inicializado com sucesso")
-                except Exception as e:
-                    logger.error(f"Erro ao inicializar o driver do Chrome: {e}")
-                    return [f"Erro ao inicializar o navegador: {e}"]
+        Args:
+            results (list): Lista de resultados da busca
             
-            # Formata a consulta para URL
-            search_url = f"https://www.google.com/search?q={quote_plus(query)}"
+        Returns:
+            list: Lista de resultados processados
+        """
+        if not results:
+            return []
             
-            # Acessa a página de resultados
-            self.headless_driver.get(search_url)
+        # Limita o tamanho dos resultados para não sobrecarregar a IA
+        processed_results = []
+        for result in results[:10]:  # Limita a 10 resultados
+            # Cria uma cópia do resultado para não modificar o original
+            processed = {}
             
-            # Aguarda o carregamento dos resultados com retry
-            max_retries = 3
-            retries = 0
-            result_elements = []
+            # Processa o título (limita a 100 caracteres)
+            if 'title' in result:
+                processed['title'] = result['title'][:100] if len(result['title']) > 100 else result['title']
             
-            while retries < max_retries and not result_elements:
-                try:
-                    # Aguarda o carregamento dos resultados
-                    WebDriverWait(self.headless_driver, 10).until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, "div.g, div[data-sokoban-container]"))
-                    )
-                    
-                    # Tenta diferentes seletores para maior compatibilidade
-                    selectors = ["div.g", "div[data-sokoban-container]", "div.MjjYud"]
-                    
-                    for selector in selectors:
-                        result_elements = self.headless_driver.find_elements(By.CSS_SELECTOR, selector)
-                        if result_elements:
-                            break
-                    
-                    if not result_elements:
-                        logger.warning(f"Nenhum resultado encontrado com os seletores. Tentativa {retries+1}/{max_retries}")
-                        retries += 1
-                        time.sleep(2)  # Espera antes de tentar novamente
-                        
-                except TimeoutException:
-                    logger.warning(f"Timeout ao aguardar resultados da busca. Tentativa {retries+1}/{max_retries}")
-                    retries += 1
-                    time.sleep(2)  # Espera antes de tentar novamente
+            # Processa o link
+            if 'link' in result:
+                processed['link'] = result['link']
             
-            # Extrai os resultados
-            search_results = []
+            # Processa o snippet (limita a 300 caracteres)
+            if 'snippet' in result:
+                processed['snippet'] = result['snippet'][:300] if len(result['snippet']) > 300 else result['snippet']
             
-            for i, element in enumerate(result_elements):
-                if i >= num_results:
-                    break
-                    
-                try:
-                    # Tenta diferentes seletores para o título
-                    title = ""
-                    for title_selector in ["h3", ".LC20lb"]:
-                        try:
-                            title_element = element.find_element(By.CSS_SELECTOR, title_selector)
-                            title = title_element.text
-                            if title:
-                                break
-                        except (NoSuchElementException, StaleElementReferenceException):
-                            continue
-                    
-                    # Tenta diferentes seletores para o link
-                    link = ""
-                    for link_selector in ["a", "a[href]"]:
-                        try:
-                            link_element = element.find_element(By.CSS_SELECTOR, link_selector)
-                            link = link_element.get_attribute("href")
-                            if link and link.startswith("http"):
-                                break
-                        except (NoSuchElementException, StaleElementReferenceException):
-                            continue
-                    
-                    # Tenta diferentes seletores para o snippet
-                    snippet = ""
-                    for snippet_selector in ["div.VwiC3b", ".lyLwlc", ".lEBKkf", ".s3v9rd"]:
-                        try:
-                            snippet_element = element.find_element(By.CSS_SELECTOR, snippet_selector)
-                            snippet = snippet_element.text
-                            if snippet:
-                                break
-                        except (NoSuchElementException, StaleElementReferenceException):
-                            continue
-                    
-                    # Verifica se encontrou pelo menos título e link
-                    if title and link:
-                        search_results.append({
-                            'title': title,
-                            'link': link,
-                            'snippet': snippet or "Sem descrição disponível"
-                        })
-                except Exception as e:
-                    logger.warning(f"Erro ao extrair resultado {i}: {e}")
+            # Adiciona data para notícias
+            if 'date' in result:
+                processed['date'] = result['date']
+                
+            processed_results.append(processed)
             
-            # Se não encontrou resultados, tenta uma abordagem alternativa
-            if not search_results and retries >= max_retries:
-                logger.warning("Tentando método alternativo de extração de resultados")
-                try:
-                    # Captura todos os links e textos visíveis
-                    links = self.headless_driver.find_elements(By.TAG_NAME, "a")
-                    for i, link_element in enumerate(links):
-                        if i >= num_results * 2:  # Procura mais links para filtrar depois
-                            break
-                            
-                        try:
-                            href = link_element.get_attribute("href")
-                            text = link_element.text
-                            
-                            # Filtra apenas links relevantes (ignora menus, etc)
-                            if (href and href.startswith("http") and 
-                                "google" not in href.lower() and 
-                                text and len(text) > 15):
-                                
-                                search_results.append({
-                                    'title': text,
-                                    'link': href,
-                                    'snippet': "Sem descrição disponível"
-                                })
-                                
-                                if len(search_results) >= num_results:
-                                    break
-                        except Exception:
-                            continue
-                except Exception as e:
-                    logger.warning(f"Erro no método alternativo: {e}")
-            
-            # Se ainda não encontrou resultados, retorna mensagem de erro
-            if not search_results:
-                return ["Não foi possível extrair resultados da busca. Tente novamente mais tarde."]
-                
-            return search_results
-            
-        except Exception as e:
-            logger.error(f"Erro ao realizar busca headless: {e}")
-            # Tenta reinicializar o driver em caso de erro crítico
-            try:
-                if self.headless_driver:
-                    self.headless_driver.quit()
-            except:
-                pass
-            self.headless_driver = None
-            return [f"Erro ao realizar busca: {e}"]
-        
-    def _playwright_search(self, query, num_results=5):
-        """Realiza uma busca usando o Playwright com navegador headless"""
-        if not self.playwright_available:
-            logger.error("Playwright não está disponível para busca headless")
-            return ["Busca headless com Playwright não disponível. Instale com 'pip install playwright' e execute 'playwright install'"]
-        
-        try:
-            with sync_playwright() as p:
-                # Inicializa o navegador
-                browser = p.chromium.launch(headless=True)
-                context = browser.new_context(
-                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                )
-                page = context.new_page()
-                
-                # Formata a consulta para URL
-                search_url = f"https://www.google.com/search?q={quote_plus(query)}"
-                
-                # Acessa a página de resultados
-                page.goto(search_url, wait_until="domcontentloaded")
-                
-                # Aguarda o carregamento dos resultados
-                page.wait_for_selector("div.g, div[data-sokoban-container], div.MjjYud", timeout=10000)
-                
-                # Extrai os resultados
-                search_results = []
-                
-                # Tenta diferentes seletores para encontrar os resultados
-                selectors = ["div.g", "div[data-sokoban-container]", "div.MjjYud"]
-                result_elements = None
-                
-                for selector in selectors:
-                    result_elements = page.query_selector_all(selector)
-                    if result_elements and len(result_elements) > 0:
-                        break
-                
-                if not result_elements or len(result_elements) == 0:
-                    logger.warning("Nenhum resultado encontrado com os seletores no Playwright")
-                    browser.close()
-                    return ["Não foi possível encontrar resultados. Tente novamente mais tarde."]
-                
-                # Processa os resultados encontrados
-                for i, element in enumerate(result_elements):
-                    if i >= num_results:
-                        break
-                        
-                    try:
-                        # Tenta extrair o título
-                        title = ""
-                        title_element = element.query_selector("h3") or element.query_selector(".LC20lb")
-                        if title_element:
-                            title = title_element.inner_text()
-                        
-                        # Tenta extrair o link
-                        link = ""
-                        link_element = element.query_selector("a[href]") 
-                        if link_element:
-                            link = link_element.get_attribute("href")
-                        
-                        # Tenta extrair o snippet
-                        snippet = ""
-                        snippet_selectors = ["div.VwiC3b", ".lyLwlc", ".lEBKkf", ".s3v9rd"]
-                        for snippet_selector in snippet_selectors:
-                            snippet_element = element.query_selector(snippet_selector)
-                            if snippet_element:
-                                snippet = snippet_element.inner_text()
-                                if snippet:
-                                    break
-                        
-                        # Adiciona o resultado se tiver pelo menos título e link
-                        if title and link:
-                            search_results.append({
-                                'title': title,
-                                'link': link,
-                                'snippet': snippet or "Sem descrição disponível"
-                            })
-                    except Exception as e:
-                        logger.warning(f"Erro ao extrair resultado {i} com Playwright: {e}")
-                
-                # Fecha o navegador
-                browser.close()
-                
-                # Se não encontrou resultados, retorna mensagem de erro
-                if not search_results:
-                    return ["Não foi possível extrair resultados da busca. Tente novamente mais tarde."]
-                    
-                return search_results
-                
-        except Exception as e:
-            logger.error(f"Erro ao realizar busca com Playwright: {e}")
-            return [f"Erro ao realizar busca: {e}"]
-    
-    def close_driver(self):
-        """Fecha o driver do navegador headless para liberar recursos"""
-        if self.headless_driver:
-            try:
-                self.headless_driver.quit()
-                self.headless_driver = None
-                logger.info("Driver do navegador headless fechado com sucesso")
-                return True
-            except Exception as e:
-                logger.error(f"Erro ao fechar driver do navegador: {e}")
-                return False
-        return True
-    
-    def file_search(self, query, directory=None):
-        """Busca por conteúdo em arquivos locais"""
-        # Implementação básica de busca em arquivos
-        # Pode ser expandida para usar indexação ou algoritmos mais eficientes
-        results = []
-        
-        if directory is None:
-            directory = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                'data'
-            )
-        
-        try:
-            for root, _, files in os.walk(directory):
-                for file in files:
-                    if file.endswith('.txt') or file.endswith('.json'):
-                        file_path = os.path.join(root, file)
-                        try:
-                            with open(file_path, 'r', encoding='utf-8') as f:
-                                content = f.read()
-                                if query.lower() in content.lower():
-                                    results.append({
-                                        'file': file,
-                                        'path': file_path,
-                                        'match': "Conteúdo encontrado"
-                                    })
-                        except Exception as e:
-                            logger.error(f"Erro ao ler arquivo {file_path}: {e}")
-            
-            return results
-        except Exception as e:
-            logger.error(f"Erro ao buscar em arquivos: {e}")
-            return [f"Erro ao buscar em arquivos: {e}"]
+        return processed_results

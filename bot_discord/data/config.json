@@ -2,9 +2,14 @@
     "prefix": "-",
     "memory_limit": 25,
     "memory_persistence": true,
-    "ai_model": "default",
-    "search_enabled": false,
+    "ai_model": "gemma-3-4b-it",
+    "search_enabled": true,
     "log_level": "INFO",
-    "bot_keyword": "",
-    "bot_personality": "assistente amigável"
+    "bot_keyword": "bro",
+    "bot_personality": "casual e amig\u00e1vel",
+    "moderation_enabled": true,
+    "mod_antispam": true,
+    "mod_antiflood": true,
+    "mod_wordfilter": true,
+    "notifications_enabled": false
 }

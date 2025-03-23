@@ -58,6 +58,10 @@ class Memory:
         
         return list(self.short_term)[-limit:]
     
+    def get_short_term_memory(self):
+        """Retorna toda a memória de curto prazo"""
+        return list(self.short_term)
+    
     def store_permanent_info(self, key, value):
         """Armazena uma informação permanente na memória de longo prazo"""
         self.long_term[key] = {
