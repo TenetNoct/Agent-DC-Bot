@@ -29,7 +29,12 @@ class Config:
             "search_enabled": False,  # Busca na web desativada por padrão
             "log_level": "INFO",  # Nível de log padrão
             "bot_keyword": "",  # Palavra-chave para acionar o bot (vazio = apenas menções)
-            "bot_personality": "assistente amigável"  # Personalidade padrão do bot
+            "bot_personality": "assistente amigável",  # Personalidade padrão do bot
+            "timezone_offset": -3,  # Fuso horário (Brasil: UTC-3)
+            "locale": "pt_BR",  # Localização para formatação de datas
+            "time_awareness": True,  # Habilita consciência temporal nas respostas
+            "moderation_enabled": False,  # Moderação automática desativada por padrão
+            "notifications_enabled": False  # Notificações desativadas por padrão
         }
         
         # Carrega ou cria configurações

@@ -23,20 +23,6 @@ class AIHandler:
         self.model = config.get_config_value('ai_model')
         self.max_tokens = 2048  # Valor padrão
         self.temperature = 0.7  # Valor padrão
-        
-    def set_model_params(self, max_tokens=None, temperature=None):
-        """Define parâmetros do modelo de IA"""
-        if max_tokens is not None:
-            self.max_tokens = max_tokens
-        if temperature is not None:
-            self.temperature = temperature
-    
-    def __init__(self, config):
-        self.config = config
-        self.api_url = os.getenv('LM_STUDIO_API_URL', 'http://localhost:1234/v1')
-        self.model = config.get_config_value('ai_model')
-        self.max_tokens = 2048  # Valor padrão
-        self.temperature = 0.7  # Valor padrão
         self.timeout = 30  # Timeout para requisições em segundos
         
         # Cache simples para respostas frequentes
@@ -44,7 +30,14 @@ class AIHandler:
         self.cache_size = 50  # Tamanho máximo do cache
         self.cache_enabled = True
         
-    def generate_response(self, prompt, context=None):
+    def set_model_params(self, max_tokens=None, temperature=None):
+        """Define parâmetros do modelo de IA"""
+        if max_tokens is not None:
+            self.max_tokens = max_tokens
+        if temperature is not None:
+            self.temperature = temperature
+        
+    async def generate_response(self, prompt, context=None):
         """Gera uma resposta usando o LM Studio com cache e timeout"""
         try:
             # Prepara o contexto para o modelo
@@ -52,8 +45,20 @@ class AIHandler:
             
             # Adiciona contexto se fornecido
             if context:
+                # Registra informações sobre o contexto para depuração
+                logger.debug(f"Contexto recebido: {len(context)} mensagens")
+                logger.debug(f"Memória de longo prazo: {sum(1 for msg in context if msg.get('is_memory', False))} itens")
+                
                 for msg in context:
-                    role = "assistant" if msg.get("is_bot", False) else "user"
+                    # Determina o papel da mensagem no contexto
+                    if msg.get("user_id") == "system" and msg.get("is_memory", False):
+                        # Mensagens de memória de longo prazo são tratadas como informações do sistema
+                        role = "system"
+                        logger.debug(f"Memória de longo prazo incluída: {msg.get('content', '')[:50]}...")
+                    else:
+                        # Outras mensagens são do assistente ou do usuário
+                        role = "assistant" if msg.get("is_bot", False) else "user"
+                    
                     messages.append({
                         "role": role,
                         "content": msg.get("content", "")
@@ -81,29 +86,29 @@ class AIHandler:
                 "temperature": self.temperature
             }
             
-            # Faz a requisição para a API com timeout
-            response = requests.post(
-                f"{self.api_url}/chat/completions",
-                headers={"Content-Type": "application/json"},
-                data=json.dumps(payload),
-                timeout=self.timeout  # Adiciona timeout para evitar bloqueios
-            )
-            
-            # Verifica se a requisição foi bem-sucedida
-            if response.status_code == 200:
-                result = response.json()
-                content = result["choices"][0]["message"]["content"]
+            # Faz a requisição para a API com timeout usando aiohttp (assíncrono)
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{self.api_url}/chat/completions",
+                    headers={"Content-Type": "application/json"},
+                    json=payload,
+                    timeout=self.timeout
+                ) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        content = result["choices"][0]["message"]["content"]
+                        
+                        # Armazena no cache se estiver habilitado
+                        if self.cache_enabled:
+                            self._update_cache(cache_key, content)
+                            
+                        return content
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"Erro na API do LM Studio: {response.status} - {error_text}")
+                        return "Desculpe, ocorreu um erro ao processar sua mensagem."
                 
-                # Armazena no cache se estiver habilitado
-                if self.cache_enabled:
-                    self._update_cache(cache_key, content)
-                    
-                return content
-            else:
-                logger.error(f"Erro na API do LM Studio: {response.status_code} - {response.text}")
-                return "Desculpe, ocorreu um erro ao processar sua mensagem."
-                
-        except requests.exceptions.Timeout:
+        except asyncio.TimeoutError:
             logger.error(f"Timeout ao conectar com a API do LM Studio após {self.timeout} segundos")
             return "Desculpe, a resposta está demorando muito. Por favor, tente novamente."
             
@@ -152,43 +157,54 @@ class AIHandler:
         # Aqui podem ser adicionadas regras para melhorar a resposta
         # Por exemplo, remover repetições, corrigir formatação, etc.
         return response
+        
+    def detect_memory_triggers(self, message, memory):
+        """Detecta gatilhos para armazenar informações na memória de longo prazo"""
+        # Lista de gatilhos que indicam que o usuário quer que o bot lembre de algo
+        memory_triggers = [
+            "lembre-se", "lembre se", "memorize", "guarde", "não esqueça", 
+            "anote", "grave", "registre", "salve", "armazene"
+        ]
+        
+        # Verifica se a mensagem contém algum dos gatilhos
+        message_lower = message.lower()
+        triggered = False
+        trigger_used = None
+        
+        for trigger in memory_triggers:
+            if trigger in message_lower:
+                triggered = True
+                trigger_used = trigger
+                break
+                
+        if not triggered:
+            return False
+            
+        # Extrai a informação que deve ser armazenada
+        # Procura pelo gatilho e pega o texto após ele
+        trigger_index = message_lower.find(trigger_used)
+        if trigger_index >= 0:
+            # Pega o texto após o gatilho
+            info_to_store = message[trigger_index + len(trigger_used):].strip()
+            
+            # Remove palavras como "que", "de", "do", "da" no início da informação
+            info_to_store = info_to_store.lstrip("que de do da dos das ").strip()
+            
+            # Se a informação não estiver vazia, armazena na memória de longo prazo
+            if info_to_store:
+                # Gera uma chave baseada no conteúdo da informação
+                import hashlib
+                key = f"user_info_{hashlib.md5(info_to_store.encode('utf-8')).hexdigest()[:8]}"
+                
+                # Armazena a informação na memória de longo prazo
+                memory.store_permanent_info(key, info_to_store)
+                logger.info(f"Informação armazenada na memória de longo prazo: {info_to_store}")
+                return True
+                
+        return False
 
-    async def _generate_response(self, prompt):
-        """Gera uma resposta assíncrona usando o LM Studio"""
-        try:
-            # Prepara os dados para a API
-            payload = {
-                "model": self.model,
-                "messages": [
-                    {"role": "user", "content": prompt}
-                ],
-                "max_tokens": self.max_tokens,
-                "temperature": self.temperature
-            }
-            
-            # Faz a requisição para a API com timeout
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    f"{self.api_url}/chat/completions",
-                    headers={"Content-Type": "application/json"},
-                    json=payload,
-                    timeout=self.timeout
-                ) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        return result["choices"][0]["message"]["content"]
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"Erro na API do LM Studio: {response.status} - {error_text}")
-                        return "Desculpe, ocorreu um erro ao processar sua mensagem."
-                        
-        except asyncio.TimeoutError:
-            logger.error(f"Timeout ao conectar com a API do LM Studio após {self.timeout} segundos")
-            return "Desculpe, a resposta está demorando muito. Por favor, tente novamente."
-            
-        except Exception as e:
-            logger.error(f"Erro ao gerar resposta: {e}")
-            return "Desculpe, ocorreu um erro ao processar sua mensagem."
+    # O método _generate_response foi removido por ser redundante
+    # Agora todas as chamadas usam diretamente o método generate_response
 
     async def analyze_search_results(self, results, query):
         """Analisa os resultados da busca usando a IA"""
@@ -256,7 +272,7 @@ class AIHandler:
                 "Mantenha a resposta concisa e focada especificamente na pergunta feita."
             )
 
-            response = await self._generate_response(prompt)
+            response = await self.generate_response(prompt)
             return response.strip()
         except Exception as e:
             logger.error(f"Erro na análise de resultados: {e}")

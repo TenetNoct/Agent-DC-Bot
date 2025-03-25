@@ -61,6 +61,31 @@ class Memory:
     def get_short_term_memory(self):
         """Retorna toda a memória de curto prazo"""
         return list(self.short_term)
+        
+    def get_combined_memory(self):
+        """Retorna uma combinação da memória de curto prazo com informações relevantes da memória de longo prazo"""
+        # Obtém a memória de curto prazo
+        short_term = list(self.short_term)
+        
+        # Se não houver informações na memória de longo prazo, retorna apenas a memória de curto prazo
+        if not self.long_term:
+            return short_term
+            
+        # Cria uma mensagem de sistema no início do contexto com as informações da memória de longo prazo
+        long_term_info = []
+        for key, info in self.long_term.items():
+            # Adiciona cada informação da memória de longo prazo
+            long_term_info.append({
+                "user_id": "system",
+                "username": "system",
+                "content": f"Informação importante: {info['value']}",
+                "timestamp": info['timestamp'],
+                "is_bot": False,
+                "is_memory": True  # Marca como uma entrada de memória de longo prazo
+            })
+        
+        # Combina as memórias, colocando as informações de longo prazo no início
+        return long_term_info + short_term
     
     def store_permanent_info(self, key, value):
         """Armazena uma informação permanente na memória de longo prazo"""

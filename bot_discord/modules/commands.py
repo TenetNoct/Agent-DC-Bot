@@ -45,6 +45,18 @@ class CommandHandler:
         @self.bot.command(name='limpar', help='Limpa a memória de curto prazo do bot')
         async def clear_memory_command(ctx):
             await self._clear_memory_command(ctx)
+            
+        @self.bot.command(name='lembrar', help='Recupera informações da memória de longo prazo')
+        async def remember_command(ctx, *, query=None):
+            await self._remember_command(ctx, query)
+            
+        @self.bot.command(name='memorias', help='Lista todas as informações armazenadas na memória de longo prazo')
+        async def list_memories_command(ctx):
+            await self._list_memories_command(ctx)
+            
+        @self.bot.command(name='limpar_memorias', help='Limpa todas as informações da memória de longo prazo')
+        async def clear_memories_command(ctx):
+            await self._clear_memories_command(ctx)
         
         @self.bot.command(name='buscar', help='Busca informações na web')
         async def search_command(ctx, *, query):
@@ -83,6 +95,31 @@ class CommandHandler:
         async def list_custom_commands(ctx):
             await self._list_custom_commands(ctx)
             
+        # Comandos relacionados ao tempo e datas
+        @self.bot.command(name='hora', help='Mostra a data e hora atuais')
+        async def time_command(ctx):
+            await self._time_command(ctx)
+            
+        @self.bot.command(name='data_add', help='Adiciona uma data especial ao calendário')
+        async def add_date_command(ctx, date_str=None, *, name=None):
+            await self._add_date_command(ctx, date_str, name)
+            
+        @self.bot.command(name='data_remove', help='Remove uma data especial do calendário')
+        async def remove_date_command(ctx, *, name=None):
+            await self._remove_date_command(ctx, name)
+            
+        @self.bot.command(name='datas', help='Lista todas as datas especiais cadastradas')
+        async def list_dates_command(ctx):
+            await self._list_dates_command(ctx)
+            
+        @self.bot.command(name='proximas_datas', help='Mostra as próximas datas especiais')
+        async def upcoming_dates_command(ctx, limit: int = 5):
+            await self._upcoming_dates_command(ctx, limit)
+            
+        @self.bot.command(name='fuso_horario', help='Define o fuso horário do bot')
+        async def timezone_command(ctx, offset: int = None):
+            await self._timezone_command(ctx, offset)
+        
         # Carrega comandos personalizados salvos
         self._load_custom_commands()
     
@@ -128,6 +165,24 @@ class CommandHandler:
         commands_embed.add_field(
             name=f"{prefix}limpar",
             value="Limpa a memória de curto prazo do bot, removendo o histórico de conversas recentes",
+            inline=False
+        )
+        
+        commands_embed.add_field(
+            name=f"{prefix}lembrar [consulta]",
+            value="Busca informações específicas na memória de longo prazo do bot\nExemplo: `{prefix}lembrar aniversário`",
+            inline=False
+        )
+        
+        commands_embed.add_field(
+            name=f"{prefix}memorias",
+            value="Lista todas as informações armazenadas na memória de longo prazo do bot",
+            inline=False
+        )
+        
+        commands_embed.add_field(
+            name=f"{prefix}limpar_memorias",
+            value="Limpa todas as informações da memória de longo prazo do bot",
             inline=False
         )
         
@@ -441,6 +496,146 @@ class CommandHandler:
         if not self.custom_commands:
             await ctx.send("ℹ️ Não há comandos personalizados registrados.")
             return
+            
+    async def _remember_command(self, ctx, query=None):
+        """Recupera uma informação específica da memória de longo prazo"""
+        if not query:
+            await ctx.send("❓ Por favor, especifique o que você deseja que eu lembre. Exemplo: `!lembrar aniversário`")
+            return
+            
+        # Obtém todas as informações da memória de longo prazo
+        memories = self.memory.long_term
+        
+        if not memories:
+            await ctx.send("📭 Não há informações armazenadas na memória de longo prazo.")
+            return
+        
+        # Busca por correspondências na memória
+        found_memories = []
+        query_lower = query.lower()
+        
+        for key, data in memories.items():
+            # Ignora a chave de personalidade que é usada internamente
+            if key == 'personality':
+                continue
+                
+            value = data.get("value", "")
+            
+            # Verifica se a consulta está contida no valor
+            if query_lower in value.lower():
+                found_memories.append({
+                    "key": key,
+                    "value": value,
+                    "timestamp": data.get("timestamp", "")
+                })
+        
+        if not found_memories:
+            await ctx.send(f"🔍 Não encontrei nenhuma informação sobre '{query}' na minha memória.")
+            return
+        
+        # Cria um embed para mostrar as informações encontradas
+        embed = discord.Embed(
+            title=f"💭 Lembranças sobre: {query}",
+            description="Informações encontradas na memória de longo prazo.",
+            color=discord.Color.green()
+        )
+        
+        # Adiciona cada informação encontrada ao embed
+        for memory in found_memories:
+            # Formata a data para exibição
+            import datetime
+            try:
+                dt = datetime.datetime.fromisoformat(memory["timestamp"])
+                formatted_date = dt.strftime("%d/%m/%Y %H:%M")
+            except:
+                formatted_date = "Data desconhecida"
+            
+            embed.add_field(
+                name=f"📝 Informação",
+                value=f"{memory['value']}\n*Armazenada em: {formatted_date}*",
+                inline=False
+            )
+        
+        # Adiciona um rodapé com informações sobre a busca
+        embed.set_footer(text=f"Busca realizada em {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}")
+        
+        # Envia o embed com as informações encontradas
+        await ctx.send(embed=embed)
+        
+    async def _list_memories_command(self, ctx):
+        """Lista todas as informações armazenadas na memória de longo prazo"""
+        # Obtém todas as informações da memória de longo prazo
+        memories = self.memory.long_term
+        
+        # Filtra a chave de personalidade que é usada internamente
+        user_memories = {k: v for k, v in memories.items() if k != 'personality'}
+        
+        if not user_memories:
+            await ctx.send("📭 Não há informações armazenadas na memória de longo prazo.")
+            return
+        
+        # Cria um embed para mostrar todas as informações
+        embed = discord.Embed(
+            title="💭 Memórias Armazenadas",
+            description="Todas as informações armazenadas na memória de longo prazo.",
+            color=discord.Color.blue()
+        )
+        
+        # Adiciona cada informação ao embed
+        for key, data in user_memories.items():
+            value = data.get("value", "")
+            timestamp = data.get("timestamp", "")
+            
+            # Formata a data para exibição
+            import datetime
+            try:
+                dt = datetime.datetime.fromisoformat(timestamp)
+                formatted_date = dt.strftime("%d/%m/%Y %H:%M")
+            except:
+                formatted_date = "Data desconhecida"
+            
+            # Limita o tamanho do valor para evitar embeds muito grandes
+            if len(value) > 200:
+                value = value[:197] + "..."
+            
+            embed.add_field(
+                name=f"📝 Informação",
+                value=f"{value}\n*Armazenada em: {formatted_date}*",
+                inline=False
+            )
+        
+        # Adiciona um rodapé com informações
+        embed.set_footer(text=f"Total de memórias: {len(user_memories)} | Listagem feita em {datetime.datetime.now().strftime('%d/%m/%Y %H:%M')}")
+        
+        # Envia o embed com as informações
+        await ctx.send(embed=embed)
+    
+    async def _clear_memories_command(self, ctx):
+        """Limpa todas as informações da memória de longo prazo"""
+        # Pede confirmação antes de limpar
+        confirmation_message = await ctx.send("⚠️ Tem certeza que deseja limpar todas as informações da memória de longo prazo? Esta ação não pode ser desfeita.")
+        
+        # Adiciona reações para confirmação
+        await confirmation_message.add_reaction("✅")
+        await confirmation_message.add_reaction("❌")
+        
+        def check(reaction, user):
+            return user == ctx.author and str(reaction.emoji) in ["✅", "❌"] and reaction.message.id == confirmation_message.id
+        
+        try:
+            # Espera pela reação do usuário
+            reaction, user = await self.bot.wait_for('reaction_add', timeout=30.0, check=check)
+            
+            if str(reaction.emoji) == "✅":
+                # Limpa a memória de longo prazo
+                self.memory.clear_long_term()
+                await ctx.send("✅ Memória de longo prazo limpa com sucesso!")
+            else:
+                await ctx.send("❌ Operação cancelada.")
+                
+        except Exception as e:
+            logger.error(f"Erro ao limpar memória de longo prazo: {e}")
+            await ctx.send("⏱️ Tempo esgotado ou ocorreu um erro. Operação cancelada.")
         
         # Cria um embed para listar os comandos
         embed = discord.Embed(

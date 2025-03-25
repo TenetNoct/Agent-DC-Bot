@@ -29,11 +29,8 @@ class DiscordBot:
         # Inicialização do bot com prefixo de comando
         self.bot = commands.Bot(command_prefix=self.config.get_prefix(), intents=intents)
         
-        # Módulos do bot (serão inicializados posteriormente)
-        self.memory = None
-        self.ai_handler = None
-        self.search_engine = None
-        self.command_handler = None
+        # Módulos do bot (serão inicializados sob demanda)
+        self._modules = {}
         
         # Registrar eventos
         self.register_events()
@@ -68,45 +65,63 @@ class DiscordBot:
         
         # Se o bot foi mencionado ou a palavra-chave foi detectada
         if was_mentioned or contains_keyword:
-            # Inicializa os módulos se ainda não foram inicializados
-            if not self.ai_handler:
-                # Importa os módulos aqui para evitar importação circular
+            # Inicializa os módulos necessários sob demanda
+            if 'memory' not in self._modules:
                 from modules.memory import Memory
+                self._modules['memory'] = Memory(self.config)
+            
+            if 'ai_handler' not in self._modules:
                 from modules.ai_handler import AIHandler
+                self._modules['ai_handler'] = AIHandler(self.config)
+            
+            if 'search_engine' not in self._modules:
                 from modules.search import SearchEngine
+                self._modules['search_engine'] = SearchEngine(self.config)
+            
+            if 'time_handler' not in self._modules:
+                from modules.time_handler import TimeHandler
+                self._modules['time_handler'] = TimeHandler(self.config)
+            
+            if 'command_handler' not in self._modules:
                 from modules.commands import CommandHandler
-                
-                # Inicializa os módulos
-                self.memory = Memory(self.config)
-                self.ai_handler = AIHandler(self.config)
-                self.search_engine = SearchEngine(self.config)
-                self.command_handler = CommandHandler(self.bot, self.config, self.memory, self.ai_handler, self.search_engine)
+                self._modules['command_handler'] = CommandHandler(
+                    self.bot,
+                    self.config,
+                    self._modules['memory'],
+                    self._modules['ai_handler'],
+                    self._modules['search_engine']
+                )
             
             # Adiciona a mensagem à memória
-            self.memory.add_message(message.author.id, message.author.name, message.content)
+            self._modules['memory'].add_message(message.author.id, message.author.name, message.content)
             
             # Remove a menção do bot da mensagem, se presente
             user_message = message.content
             if was_mentioned:
                 user_message = user_message.replace(f'<@{self.bot.user.id}>', '').strip()
+                
+            # Verifica se a mensagem contém gatilhos para armazenar na memória de longo prazo
+            memory_triggered = self._modules['ai_handler'].detect_memory_triggers(user_message, self._modules['memory'])
+            if memory_triggered:
+                await message.add_reaction('💾')  # Adiciona uma reação para indicar que a informação foi armazenada
             
-            # Obtém o contexto da conversa da memória
-            context = self.memory.get_short_term_memory()
+            # Obtém o contexto da conversa da memória (combinando memória de curto e longo prazo)
+            context = self._modules['memory'].get_combined_memory()
             
             # Obtém a personalidade configurada do bot
             bot_personality = self.config.get_config_value('bot_personality', '')
             
             # Formata o prompt com a personalidade do bot
-            formatted_prompt = self.ai_handler.format_prompt(user_message, bot_personality)
+            formatted_prompt = self._modules['ai_handler'].format_prompt(user_message, bot_personality)
             
-            # Gera a resposta usando o LM Studio
-            response = self.ai_handler.generate_response(formatted_prompt, context)
+            # Gera a resposta usando o LM Studio (método assíncrono)
+            response = await self._modules['ai_handler'].generate_response(formatted_prompt, context)
             
             # Processa a resposta para melhorar a inteligibilidade
-            processed_response = self.ai_handler.process_response(response)
+            processed_response = self._modules['ai_handler'].process_response(response)
             
             # Adiciona a resposta do bot à memória
-            self.memory.add_message(self.bot.user.id, self.bot.user.name, processed_response, is_bot=True)
+            self._modules['memory'].add_message(self.bot.user.id, self.bot.user.name, processed_response, is_bot=True)
             
             # Envia a resposta
             await message.channel.send(processed_response)
@@ -114,17 +129,32 @@ class DiscordBot:
     
     def load_commands(self):
         """Carrega os módulos e comandos do bot"""
-        # Importa os módulos aqui para evitar importação circular
-        from modules.memory import Memory
-        from modules.ai_handler import AIHandler
-        from modules.search import SearchEngine
-        from modules.commands import CommandHandler
+        # Inicializa todos os módulos necessários
+        if 'memory' not in self._modules:
+            from modules.memory import Memory
+            self._modules['memory'] = Memory(self.config)
         
-        # Inicializa os módulos
-        self.memory = Memory(self.config)
-        self.ai_handler = AIHandler(self.config)
-        self.search_engine = SearchEngine(self.config)
-        self.command_handler = CommandHandler(self.bot, self.config, self.memory, self.ai_handler, self.search_engine)
+        if 'ai_handler' not in self._modules:
+            from modules.ai_handler import AIHandler
+            self._modules['ai_handler'] = AIHandler(self.config)
+        
+        if 'search_engine' not in self._modules:
+            from modules.search import SearchEngine
+            self._modules['search_engine'] = SearchEngine(self.config)
+        
+        if 'time_handler' not in self._modules:
+            from modules.time_handler import TimeHandler
+            self._modules['time_handler'] = TimeHandler(self.config)
+        
+        if 'command_handler' not in self._modules:
+            from modules.commands import CommandHandler
+            self._modules['command_handler'] = CommandHandler(
+                self.bot,
+                self.config,
+                self._modules['memory'],
+                self._modules['ai_handler'],
+                self._modules['search_engine']
+            )
         
     def run(self):
         try:
